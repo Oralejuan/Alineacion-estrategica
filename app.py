@@ -373,28 +373,26 @@ def main():
                                 if r['fuente']:
                                     st.caption(f"Fuente: {r['fuente']}")
                                 else:  # Explorar catálogos
-                                    
-        st.header("📚 Explorar catálogos")
-        cat = st.selectbox("Selecciona un catálogo", ["Instrumentos", "Objetivos", "Metas", "Conceptos Estratégicos", "Amenazas"])
-        texto_buscar = st.text_input("Filtrar por texto")
-        if cat == "Instrumentos":
-            df = df_inst
-            cols = ['nombre', 'escala', 'año_inicio', 'año_fin', 'entidad_lider', 'tematica_principal']
-        elif cat == "Objetivos":
-            df = df_objs
-            cols = ['id_objetivo', 'instrumento', 'nombre', 'descripción', 'nivel']
-        elif cat == "Metas":
-            df = df_metas
-            cols = ['id_meta', 'id_objetivo', 'descripcion', 'horizonte', 'sector']
-        elif cat == "Conceptos Estratégicos":
-            df = df_conceptos
-            cols = ['id_concepto', 'Concepto', 'Definición', 'Fuente / Marco']
-        else:
-            df = df_amenazas
-            cols = ['id_amenazas', 'categoria', 'subcategoria', 'amenaza', 'descripcion_amenazas']
-        df_filt = filtrar_tabla(df, texto_buscar)
-        st.write(f"Mostrando {len(df_filt)} de {len(df)} filas")
-        st.dataframe(df_filt[cols], use_container_width=True)
-
-if __name__ == "__main__":
-    main()
+                                    st.header("📚 Explorar catálogos")
+                                    cat = st.selectbox("Selecciona un catálogo", ["Instrumentos", "Objetivos", "Metas", "Conceptos Estratégicos", "Amenazas"])
+                                    texto_buscar = st.text_input("Filtrar por texto")
+                                    if cat == "Instrumentos":
+                                        df = df_inst
+                                        cols = ['nombre', 'escala', 'año_inicio', 'año_fin', 'entidad_lider', 'tematica_principal']
+                                    elif cat == "Objetivos":
+                                        df = df_objs
+                                        cols = ['id_objetivo', 'instrumento', 'nombre', 'descripción', 'nivel']
+                                    elif cat == "Metas":
+                                        df = df_metas
+                                        cols = ['id_meta', 'id_objetivo', 'descripcion', 'horizonte', 'sector']
+                                    elif cat == "Conceptos Estratégicos":
+                                        df = df_conceptos
+                                        cols = ['id_concepto', 'Concepto', 'Definición', 'Fuente / Marco']
+                                    else:
+                                        df = df_amenazas
+                                        cols = ['id_amenazas', 'categoria', 'subcategoria', 'amenaza', 'descripcion_amenazas']
+                                        df_filt = filtrar_tabla(df, texto_buscar)
+                                        st.write(f"Mostrando {len(df_filt)} de {len(df)} filas")
+                                        st.dataframe(df_filt[cols], use_container_width=True)
+                            if __name__ == "__main__":
+                                main()

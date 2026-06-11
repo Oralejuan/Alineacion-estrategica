@@ -289,7 +289,7 @@ def main():
         return
     
     if modo == "🔍 Alineación de proyectos":
-    model = cargar_modelo()
+        model = cargar_modelo()
     if 'emb_inst' not in st.session_state:   # NUEVO
         with st.spinner("Generando índices de búsqueda..."):
             emb_inst, emb_objs, emb_metas, emb_conceptos = generar_embeddings(

@@ -4,14 +4,15 @@ import numpy as np
 import re
 import math
 from collections import Counter
+import sqlite3
 import io
 
 st.set_page_config(page_title="Alineación Estratégica", layout="wide")
 st.title("🎯 Buscador de Alineación Estratégica")
-st.markdown("Ingresa el objetivo o descripción de tu proyecto. La herramienta buscará los **instrumentos**, **objetivos**, **metas** y **conceptos estratégicos** más relevantes.")
+st.markdown("Ingresa el objetivo o descripción de tu proyecto.")
 
 # -------------------------------------------------------------
-# Funciones TF-IDF manual
+# Funciones TF-IDF manual (se mantienen igual)
 # -------------------------------------------------------------
 def preprocess(text):
     if pd.isna(text):
@@ -53,28 +54,30 @@ def cosine_similarity_vec(v1, v2):
     return np.dot(v1, v2) / (norm1 * norm2)
 
 # -------------------------------------------------------------
-# Carga de datos con manejo de errores
+# Carga de datos desde SQLite (nuevo)
 # -------------------------------------------------------------
 @st.cache_resource
-def cargar_datos(archivo):
+def cargar_datos():
+    """Carga los datos desde la base de datos SQLite."""
+    db_path = "mi_base_de_datos.db"
     try:
-        # Intentar leer cada hoja con engine explícito
-        df_inst = pd.read_excel(archivo, sheet_name="INSTRUMENTOS", engine='openpyxl')
-        df_objs = pd.read_excel(archivo, sheet_name="OBJETIVOS", engine='openpyxl')
-        df_metas = pd.read_excel(archivo, sheet_name="METAS", engine='openpyxl')
-        df_rel = pd.read_excel(archivo, sheet_name="REL_META_CONCEPTO", engine='openpyxl')
-        df_conceptos = pd.read_excel(archivo, sheet_name="CONCEPTOS_ESTRATEGICOS", engine='openpyxl')
+        # Conectar a la base de datos
+        conn = sqlite3.connect(db_path)
+        # Cargar cada tabla en un DataFrame
+        df_inst = pd.read_sql_query("SELECT * FROM INSTRUMENTOS", conn)
+        df_objs = pd.read_sql_query("SELECT * FROM OBJETIVOS", conn)
+        df_metas = pd.read_sql_query("SELECT * FROM METAS", conn)
+        df_rel = pd.read_sql_query("SELECT * FROM REL_META_CONCEPTO", conn)
+        df_conceptos = pd.read_sql_query("SELECT * FROM CONCEPTOS_ESTRATEGICOS", conn)
+        conn.close()
+        return df_inst, df_objs, df_metas, df_rel, df_conceptos
     except Exception as e:
-        st.error(f"Error al leer el archivo Excel: {e}")
-        st.info("Asegúrate de que el archivo sea válido y tenga las hojas correctas.")
+        st.error(f"Error al cargar la base de datos. Asegúrate de que '{db_path}' existe. Error: {e}")
         return None, None, None, None, None
-    
-    df_objs = df_objs.drop_duplicates(subset=['id_objetivo'])
-    if not df_rel.empty and not df_conceptos.empty:
-        df_rel = df_rel.merge(df_conceptos[['id_concepto', 'Concepto']],
-                              left_on='concepto', right_on='Concepto', how='left')
-    return df_inst, df_objs, df_metas, df_rel, df_conceptos
 
+# -------------------------------------------------------------
+# Preparación de índices (se mantiene igual)
+# -------------------------------------------------------------
 @st.cache_resource
 def preparar_indices(df_objs, df_metas):
     textos_objs = (df_objs['nombre'].fillna('') + " " + df_objs['descripción'].fillna('')).tolist()
@@ -134,37 +137,18 @@ def buscar(query, tfidf_objs, tfidf_metas, vocab, idf, df_objs, df_metas, df_rel
     return resultados
 
 # -------------------------------------------------------------
-# Interfaz de usuario
+# Interfaz Principal
 # -------------------------------------------------------------
 def main():
     st.sidebar.header("📂 Datos")
-    archivo_opcion = st.sidebar.radio("Selecciona la fuente", ["Subir archivo Excel", "Usar archivo predefinido"])
-    
-    archivo = None
-    if archivo_opcion == "Subir archivo Excel":
-        uploaded_file = st.sidebar.file_uploader("Sube tu archivo .xlsx", type=["xlsx"])
-        if uploaded_file is not None:
-            archivo = uploaded_file
-        else:
-            st.info("Por favor sube un archivo Excel para continuar.")
-            return
-    else:
-        # Ruta predefinida (solo si el archivo existe en el sistema de Streamlit Cloud)
-        archivo = "BASE_ALINEACION_ESTRATEGICA.xlsx"
-        st.sidebar.info(f"Usando archivo: {archivo}")
-        # Verificar si existe (opcional)
-        import os
-        if not os.path.exists(archivo):
-            st.sidebar.error(f"El archivo {archivo} no se encuentra. Usa la opción de subir.")
-            return
-    
-    with st.spinner("Cargando datos..."):
-        df_inst, df_objs, df_metas, df_rel, df_conceptos = cargar_datos(archivo)
+    # Cargar datos desde la base de datos local
+    with st.spinner("Cargando base de datos..."):
+        df_inst, df_objs, df_metas, df_rel, df_conceptos = cargar_datos()
     if df_objs is None or df_objs.empty:
-        st.error("No se pudieron cargar los datos. Revisa que el archivo Excel tenga las hojas correctas.")
+        st.error("No se pudieron cargar los datos. Asegúrate de que el archivo 'mi_base_de_datos.db' existe.")
         return
     
-    st.sidebar.success("✅ Datos cargados")
+    st.sidebar.success("✅ Datos cargados desde la base de datos")
     st.sidebar.write(f"Objetivos: {len(df_objs)} | Metas: {len(df_metas)}")
     
     with st.spinner("Preparando índices TF-IDF..."):

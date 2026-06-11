@@ -75,34 +75,55 @@ def cargar_modelo():
 # -------------------------------------------------------------
 # Generar embeddings y guardar en session_state
 # -------------------------------------------------------------
-def generar_embeddings(model, df_objs, df_metas, df_conceptos):
-    # Textos
+def generar_embeddings(model, df_inst, df_objs, df_metas, df_conceptos):   # NUEVO: añadido df_inst
+    # Textos de instrumentos (nombre + descripción)
+    textos_inst = (df_inst['nombre'].fillna('') + " " + df_inst['descripción'].fillna('')).apply(preprocess).tolist()   # NUEVO
     textos_objs = (df_objs['nombre'].fillna('') + " " + df_objs['descripción'].fillna('')).apply(preprocess).tolist()
     textos_metas = df_metas['descripcion'].fillna('').apply(preprocess).tolist()
     textos_conceptos = (df_conceptos['Concepto'].fillna('') + " " + df_conceptos['Definición'].fillna('')).apply(preprocess).tolist()
     
-    # Generar embeddings
     with st.spinner("Generando embeddings (puede tardar un minuto la primera vez)..."):
+        emb_inst = model.encode(textos_inst, show_progress_bar=False)      # NUEVO
         emb_objs = model.encode(textos_objs, show_progress_bar=False)
         emb_metas = model.encode(textos_metas, show_progress_bar=False)
         emb_conceptos = model.encode(textos_conceptos, show_progress_bar=False)
     
+    return emb_inst, emb_objs, emb_metas, emb_conceptos   # NUEVO: devuelve emb_inst
+    
     return emb_objs, emb_metas, emb_conceptos
 
-def buscar_alineacion(query, model, emb_objs, emb_metas, emb_conceptos,
-                      df_objs, df_metas, df_conceptos, df_rel, top_n=10):
+def buscar_alineacion(query, model, emb_inst, emb_objs, emb_metas, emb_conceptos,   # NUEVO: emb_inst
+                      df_inst, df_objs, df_metas, df_conceptos, df_rel, top_n=10):  # NUEVO: df_inst
     query_limpia = preprocess(query)
     if not query_limpia:
-        return [], [], []
+        return [], [], [], []   # NUEVO: retorna también instrumentos vacío
     emb_q = model.encode([query_limpia])
+    sim_inst = cosine_similarity(emb_q, emb_inst).flatten()   # NUEVO
     sim_objs = cosine_similarity(emb_q, emb_objs).flatten()
     sim_metas = cosine_similarity(emb_q, emb_metas).flatten()
     sim_conceptos = cosine_similarity(emb_q, emb_conceptos).flatten()
     
+    idx_inst = np.argsort(sim_inst)[::-1][:top_n]   # NUEVO
     idx_objs = np.argsort(sim_objs)[::-1][:top_n]
     idx_metas = np.argsort(sim_metas)[::-1][:top_n]
     idx_conceptos = np.argsort(sim_conceptos)[::-1][:top_n]
     
+    # Resultados para instrumentos (nuevo)
+    resultados_inst = []
+    for idx in idx_inst:
+        score = sim_inst[idx]
+        if score < 0.01: continue
+        row = df_inst.iloc[idx]
+        resultados_inst.append({
+            'nombre': row['nombre'],
+            'descripcion': row['descripción'],
+            'escala': row.get('escala', ''),
+            'año_inicio': row.get('año_inicio', ''),
+            'entidad_lider': row.get('entidad_lider', ''),
+            'similitud': round(score, 3)
+        })
+    
+    # Resultados para objetivos (sin cambios)
     resultados_objs = []
     for idx in idx_objs:
         score = sim_objs[idx]
@@ -116,6 +137,7 @@ def buscar_alineacion(query, model, emb_objs, emb_metas, emb_conceptos,
             'similitud': round(score, 3)
         })
     
+    # Resultados para metas (sin cambios)
     resultados_metas = []
     col_meta = obtener_columna_meta(df_rel)
     for idx in idx_metas:
@@ -140,6 +162,7 @@ def buscar_alineacion(query, model, emb_objs, emb_metas, emb_conceptos,
             'conceptos': conceptos
         })
     
+    # Resultados para conceptos (sin cambios)
     resultados_conceptos = []
     for idx in idx_conceptos:
         score = sim_conceptos[idx]
@@ -151,10 +174,14 @@ def buscar_alineacion(query, model, emb_objs, emb_metas, emb_conceptos,
             'fuente': row.get('Fuente / Marco', ''),
             'similitud': round(score, 3)
         })
-    return resultados_objs, resultados_metas, resultados_conceptos
+    return resultados_inst, resultados_objs, resultados_metas, resultados_conceptos   # NUEVO
 
-def exportar_resultados_csv(res_objs, res_metas, res_conceptos):
+def exportar_resultados_csv(res_inst, res_objs, res_metas, res_conceptos):   # NUEVO
     rows = []
+    for r in res_inst:
+        rows.append({'Tipo': 'Instrumento', 'Nombre': r['nombre'], 'Descripción': r['descripcion'],
+                     'Escala': r['escala'], 'Año inicio': r['año_inicio'],
+                     'Entidad líder': r['entidad_lider'], 'Similitud': r['similitud']})
     for r in res_objs:
         rows.append({'Tipo': 'Objetivo', 'Nombre': r['nombre'], 'Descripción': r['descripcion'],
                      'Instrumento': r['instrumento'], 'Similitud': r['similitud']})
@@ -262,25 +289,27 @@ def main():
         return
     
     if modo == "🔍 Alineación de proyectos":
-        model = cargar_modelo()
-        # Inicializar embeddings en session_state si no existen
-        if 'emb_objs' not in st.session_state:
-            with st.spinner("Generando índices de búsqueda (puede tardar un minuto la primera vez)..."):
-                emb_objs, emb_metas, emb_conceptos = generar_embeddings(model, df_objs, df_metas, df_conceptos)
-                st.session_state.emb_objs = emb_objs
-                st.session_state.emb_metas = emb_metas
-                st.session_state.emb_conceptos = emb_conceptos
-        else:
-            emb_objs = st.session_state.emb_objs
-            emb_metas = st.session_state.emb_metas
-            emb_conceptos = st.session_state.emb_conceptos
+    model = cargar_modelo()
+    if 'emb_inst' not in st.session_state:   # NUEVO
+        with st.spinner("Generando índices de búsqueda..."):
+            emb_inst, emb_objs, emb_metas, emb_conceptos = generar_embeddings(
+                model, df_inst, df_objs, df_metas, df_conceptos)   # NUEVO: pasar df_inst
+            st.session_state.emb_inst = emb_inst
+            st.session_state.emb_objs = emb_objs
+            st.session_state.emb_metas = emb_metas
+            st.session_state.emb_conceptos = emb_conceptos
+    else:
+        emb_inst = st.session_state.emb_inst
+        emb_objs = st.session_state.emb_objs
+        emb_metas = st.session_state.emb_metas
+        emb_conceptos = st.session_state.emb_conceptos
         
         consulta = st.text_area("Describe tu proyecto:", height=100)
         top_n = st.slider("Número de resultados por categoría", 5, 20, 10)
         # Filtros laterales
         with st.sidebar:
             st.subheader("🔎 Filtros")
-            mostrar = st.multiselect("Mostrar", ["Objetivos", "Metas", "Conceptos"], default=["Objetivos", "Metas", "Conceptos"])
+            mostrar = st.multiselect("Mostrar", ["Instrumentos", "Objetivos", "Metas", "Conceptos"], default=["Instrumentos", "Objetivos", "Metas", "Conceptos"])
             min_score = st.slider("Similitud mínima", 0.0, 1.0, 0.1, 0.05)
             sectores_filtro = st.multiselect("Sector (solo metas)", df_metas['sector'].dropna().unique())
             horizontes_filtro = st.multiselect("Horizonte (solo metas)", df_metas['horizonte'].dropna().unique())
@@ -290,9 +319,10 @@ def main():
                 st.warning("Ingresa una descripción.")
             else:
                 with st.spinner("Buscando..."):
-                    res_objs, res_metas, res_conceptos = buscar_alineacion(
-                        consulta, model, emb_objs, emb_metas, emb_conceptos,
-                        df_objs, df_metas, df_conceptos, df_rel, top_n)
+                    res_inst, res_objs, res_metas, res_conceptos = buscar_alineacion(   # NUEVO
+                        consulta, model, emb_inst, emb_objs, emb_metas, emb_conceptos,
+                        df_inst, df_objs, df_metas, df_conceptos, df_rel, top_n)   # NUEVO: pasar df_inst
+                    
                 # Aplicar filtros
                 if "Objetivos" not in mostrar:
                     res_objs = []
@@ -312,16 +342,22 @@ def main():
                     st.info("No se encontraron resultados con los filtros actuales.")
                 else:
                     st.success(f"Encontrados: {len(res_objs)} objetivos, {len(res_metas)} metas, {len(res_conceptos)} conceptos.")
-                    csv_data = exportar_resultados_csv(res_objs, res_metas, res_conceptos)
+                    csv_data = exportar_resultados_csv(res_inst, res_objs, res_metas, res_conceptos)
                     st.download_button("📥 Exportar resultados a CSV", data=csv_data,
                                        file_name="resultados_alineacion.csv", mime="text/csv")
-                    tabs = st.tabs(["🎯 Objetivos", "📋 Metas", "🧠 Conceptos"])
+                    tabs = st.tabs(["📜 Instrumentos", "🎯 Objetivos", "📋 Metas", "🧠 Conceptos"])
                     with tabs[0]:
+                        for r in res_inst:
+                            with st.expander(f"{color_similitud(r['similitud'])} {r['nombre']} (score: {r['similitud']})"):
+                                st.write(f"**Descripción:** {r['descripcion']}")
+                                st.write(f"**Escala:** {r['escala']} | **Año inicio:** {r['año_inicio']}")
+                                st.write(f"**Entidad líder:** {r['entidad_lider']}")
+                    with tabs[1]:
                         for r in res_objs:
                             with st.expander(f"{color_similitud(r['similitud'])} {r['nombre']} (score: {r['similitud']})"):
                                 st.write(f"**Instrumento:** {r['instrumento']}")
                                 st.write(f"**Descripción:** {r['descripcion']}")
-                    with tabs[1]:
+                    with tabs[2]:
                         for r in res_metas:
                             with st.expander(f"{color_similitud(r['similitud'])} Meta (score: {r['similitud']})"):
                                 st.write(f"**Instrumento:** {r['instrumento']}")
@@ -330,7 +366,7 @@ def main():
                                 st.write(f"**Horizonte:** {r['horizonte']} | **Sector:** {r['sector']}")
                                 if r['conceptos']:
                                     st.write("**Conceptos clave:**", ", ".join(r['conceptos'][:5]))
-                    with tabs[2]:
+                    with tabs[3]:
                         for r in res_conceptos:
                             with st.expander(f"{color_similitud(r['similitud'])} {r['concepto']} (score: {r['similitud']})"):
                                 st.write(f"**Definición:** {r['definicion']}")

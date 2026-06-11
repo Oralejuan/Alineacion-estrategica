@@ -6,17 +6,20 @@ import math
 from collections import Counter
 import sqlite3
 
-# Configuración de página
 st.set_page_config(page_title="Alineación Estratégica", layout="wide")
-st.title("🎯 Buscador de Alineación Estratégica")
-st.markdown("""
-Ingresa el objetivo o descripción de tu proyecto.  
-La herramienta buscará los **instrumentos**, **objetivos**, **metas** y **conceptos estratégicos** más relevantes.
-""")
 
 # -------------------------------------------------------------
-# Funciones TF-IDF manual
+# Funciones de utilidad
 # -------------------------------------------------------------
+def color_similitud(score):
+    """Devuelve un emoji de color según el score."""
+    if score >= 0.7:
+        return "🟢"
+    elif score >= 0.4:
+        return "🟡"
+    else:
+        return "🔴"
+
 def preprocess(text):
     if pd.isna(text):
         return []
@@ -61,21 +64,18 @@ def cosine_similarity_vec(v1, v2):
 # -------------------------------------------------------------
 @st.cache_resource
 def cargar_datos():
-    """Carga todas las tablas desde la base de datos SQLite."""
     db_path = "mi_base_de_datos.db"
     try:
         conn = sqlite3.connect(db_path)
-        # Cargar cada tabla
         df_inst = pd.read_sql_query("SELECT * FROM INSTRUMENTOS", conn)
         df_objs = pd.read_sql_query("SELECT * FROM OBJETIVOS", conn)
         df_metas = pd.read_sql_query("SELECT * FROM METAS", conn)
         df_rel = pd.read_sql_query("SELECT * FROM REL_META_CONCEPTO", conn)
         df_conceptos = pd.read_sql_query("SELECT * FROM CONCEPTOS_ESTRATEGICOS", conn)
-        # Intentar cargar AMENAZAS si existe
         try:
             df_amenazas = pd.read_sql_query("SELECT * FROM AMENAZAS", conn)
         except:
-            df_amenazas = pd.DataFrame()  # vacío si no existe
+            df_amenazas = pd.DataFrame()
         conn.close()
         return df_inst, df_objs, df_metas, df_rel, df_conceptos, df_amenazas
     except Exception as e:
@@ -83,19 +83,17 @@ def cargar_datos():
         return None, None, None, None, None, None
 
 def obtener_columna_meta(df_rel):
-    """Devuelve el nombre de la columna que contiene el id de meta."""
-    posibles = ['id_meta', 'meta_id', 'ID_META', 'ID_META', 'idMeta']
+    posibles = ['id_meta', 'meta_id', 'ID_META', 'idMeta']
     for col in posibles:
         if col in df_rel.columns:
             return col
-    # Si no, buscar cualquier columna que contenga 'meta' en el nombre
     for col in df_rel.columns:
         if 'meta' in col.lower():
             return col
     return None
 
 # -------------------------------------------------------------
-# Preparación de índices TF-IDF
+# Preparación índices TF-IDF
 # -------------------------------------------------------------
 @st.cache_resource
 def preparar_indices(df_objs, df_metas):
@@ -114,7 +112,6 @@ def preparar_indices(df_objs, df_metas):
 
 def buscar_alineacion(query, tfidf_objs, tfidf_metas, vocab, idf,
                       df_objs, df_metas, df_rel, top_n=10):
-    """Búsqueda semántica de alineación (como antes)."""
     tokens_q = preprocess(query)
     if not tokens_q:
         return []
@@ -125,7 +122,6 @@ def buscar_alineacion(query, tfidf_objs, tfidf_metas, vocab, idf,
     idx_objs = np.argsort(sim_objs)[::-1][:top_n]
     idx_metas = np.argsort(sim_metas)[::-1][:top_n]
     resultados = []
-    # Objetivos
     for idx in idx_objs:
         score = sim_objs[idx]
         if score < 0.01: continue
@@ -138,8 +134,6 @@ def buscar_alineacion(query, tfidf_objs, tfidf_metas, vocab, idf,
             'nivel': row['nivel'],
             'similitud': round(score, 3)
         })
-    # Metas (incluyendo conceptos)
-    # Determinar columna de id_meta en df_rel
     col_meta = obtener_columna_meta(df_rel)
     for idx in idx_metas:
         score = sim_metas[idx]
@@ -148,12 +142,10 @@ def buscar_alineacion(query, tfidf_objs, tfidf_metas, vocab, idf,
         obj_row = df_objs[df_objs['id_objetivo'] == row['id_objetivo']]
         instrumento = obj_row.iloc[0]['instrumento'] if not obj_row.empty else 'No encontrado'
         obj_nombre = obj_row.iloc[0]['nombre'] if not obj_row.empty else ''
-        # Obtener conceptos asociados
         conceptos = []
-        if col_meta is not None:
+        if col_meta is not None and 'Concepto' in df_rel.columns:
             conceptos_df = df_rel[df_rel[col_meta] == row['id_meta']]
-            if 'Concepto' in conceptos_df.columns:
-                conceptos = conceptos_df['Concepto'].dropna().unique().tolist()
+            conceptos = conceptos_df['Concepto'].dropna().unique().tolist()
         resultados.append({
             'tipo': 'Meta',
             'id_meta': row['id_meta'],
@@ -169,55 +161,102 @@ def buscar_alineacion(query, tfidf_objs, tfidf_metas, vocab, idf,
     return resultados
 
 # -------------------------------------------------------------
-# Funciones para buscadores de catálogos
+# Exploración jerárquica y descriptiva
 # -------------------------------------------------------------
-def buscar_en_tabla(df, texto_busqueda, columnas=None):
-    """Filtra filas donde el texto aparezca en cualquier columna (o en columnas específicas)."""
-    if df.empty or not texto_busqueda:
-        return df
-    texto_busqueda = texto_busqueda.lower()
-    if columnas is None:
-        columnas = df.columns
-    mask = False
-    for col in columnas:
-        if df[col].dtype == 'object':
-            mask |= df[col].fillna('').astype(str).str.lower().str.contains(texto_busqueda, na=False)
-    return df[mask]
+def mostrar_instrumentos_jerarquico(df_inst, df_objs, df_metas, df_rel):
+    """Muestra estructura: Instrumento → Objetivo → Meta (con conceptos)."""
+    instrumentos = df_inst['nombre'].unique()
+    for inst in instrumentos:
+        with st.expander(f"📜 {inst}"):
+            objs = df_objs[df_objs['instrumento'] == inst]
+            if objs.empty:
+                st.write("No hay objetivos para este instrumento.")
+                continue
+            for _, obj in objs.iterrows():
+                with st.expander(f"🎯 {obj['nombre']}"):
+                    st.write(f"**Descripción:** {obj['descripción']}")
+                    metas = df_metas[df_metas['id_objetivo'] == obj['id_objetivo']]
+                    if metas.empty:
+                        st.write("No hay metas para este objetivo.")
+                    else:
+                        for _, meta in metas.iterrows():
+                            # Conceptos asociados
+                            col_meta = obtener_columna_meta(df_rel)
+                            conceptos = []
+                            if col_meta is not None and 'Concepto' in df_rel.columns:
+                                conceptos_df = df_rel[df_rel[col_meta] == meta['id_meta']]
+                                conceptos = conceptos_df['Concepto'].dropna().unique().tolist()
+                            conceptos_str = ", ".join(conceptos[:3]) + ("..." if len(conceptos) > 3 else "")
+                            st.markdown(f"**Meta:** {meta['descripcion']}")
+                            st.caption(f"Horizonte: {meta['horizonte']} | Sector: {meta['sector']} | Conceptos: {conceptos_str}")
+
+def mostrar_tabla_descriptiva(df, col_nombre, col_definicion):
+    """Selectbox para elegir un elemento y ver su definición."""
+    if df.empty:
+        st.warning("No hay datos disponibles.")
+        return
+    opciones = df[col_nombre].tolist()
+    seleccion = st.selectbox(f"Selecciona un {col_nombre}", opciones)
+    if seleccion:
+        fila = df[df[col_nombre] == seleccion].iloc[0]
+        st.info(f"**Definición:** {fila[col_definicion]}")
+        if 'Fuente / Marco' in df.columns:
+            st.caption(f"Fuente: {fila['Fuente / Marco']}")
 
 # -------------------------------------------------------------
-# Interfaz Principal
+# Exportar resultados a CSV
+# -------------------------------------------------------------
+def exportar_resultados_csv(resultados):
+    """Convierte lista de resultados a CSV."""
+    df_export = pd.DataFrame(resultados)
+    columnas_deseadas = ['tipo', 'instrumento', 'similitud']
+    if 'nombre' in df_export.columns:
+        columnas_deseadas.append('nombre')
+    if 'descripcion' in df_export.columns:
+        columnas_deseadas.append('descripcion')
+    if 'objetivo_nombre' in df_export.columns:
+        columnas_deseadas.append('objetivo_nombre')
+    if 'horizonte' in df_export.columns:
+        columnas_deseadas.append('horizonte')
+    if 'sector' in df_export.columns:
+        columnas_deseadas.append('sector')
+    if 'conceptos' in df_export.columns:
+        df_export['conceptos_str'] = df_export['conceptos'].apply(lambda x: ', '.join(x) if isinstance(x, list) else '')
+        columnas_deseadas.append('conceptos_str')
+    # Filtrar solo columnas existentes
+    columnas_final = [c for c in columnas_deseadas if c in df_export.columns]
+    df_export = df_export[columnas_final]
+    return df_export.to_csv(index=False, sep=';', encoding='utf-8-sig')
+
+# -------------------------------------------------------------
+# Interfaz principal
 # -------------------------------------------------------------
 def main():
-    # Sidebar: opciones de navegación
+    # Sidebar
     modo = st.sidebar.radio(
         "Modo de uso",
         ["🔍 Alineación de proyectos", "📚 Explorar catálogos"]
     )
     
-    # Cargar datos (una sola vez)
-    with st.spinner("Cargando base de datos..."):
-        datos = cargar_datos()
+    datos = cargar_datos()
     if datos[0] is None:
-        st.error("No se pudieron cargar los datos. Asegúrate de que 'mi_base_de_datos.db' existe.")
         return
     df_inst, df_objs, df_metas, df_rel, df_conceptos, df_amenazas = datos
     
     st.sidebar.success("✅ Datos cargados")
     st.sidebar.write(f"Objetivos: {len(df_objs)} | Metas: {len(df_metas)}")
-    if not df_amenazas.empty:
-        st.sidebar.write(f"Amenazas: {len(df_amenazas)}")
     
+    # Modo alineación
     if modo == "🔍 Alineación de proyectos":
-        # Preparar índices TF-IDF (solo necesario en este modo)
-        with st.spinner("Preparando índices TF-IDF (puede tardar unos segundos)..."):
+        with st.spinner("Preparando índices de búsqueda..."):
             tfidf_objs, tfidf_metas, vocab, idf = preparar_indices(df_objs, df_metas)
         
         consulta = st.text_area("Describe tu proyecto:", height=100)
-        top_n = st.slider("Resultados a mostrar", 5, 20, 10)
+        top_n = st.slider("Número de resultados a mostrar", 5, 20, 10)
         
         if st.button("Buscar", type="primary"):
             if not consulta.strip():
-                st.warning("Por favor ingresa una descripción.")
+                st.warning("Ingresa una descripción.")
             else:
                 with st.spinner("Buscando..."):
                     resultados = buscar_alineacion(consulta, tfidf_objs, tfidf_metas,
@@ -227,11 +266,17 @@ def main():
                     st.info("No se encontraron resultados relevantes.")
                 else:
                     st.success(f"Se encontraron {len(resultados)} resultados.")
+                    # Botón de exportación
+                    csv_data = exportar_resultados_csv(resultados)
+                    st.download_button("📥 Exportar resultados a CSV", data=csv_data,
+                                       file_name="resultados_alineacion.csv", mime="text/csv")
+                    # Mostrar resultados con color
                     for i, res in enumerate(resultados):
-                        with st.expander(f"{i+1}. {res['tipo']} - Score: {res['similitud']}"):
+                        color = color_similitud(res['similitud'])
+                        with st.expander(f"{color} {i+1}. {res['tipo']} - Similitud: {res['similitud']}"):
                             col1, col2 = st.columns([1,2])
                             with col1:
-                                st.metric("Similitud", f"{res['similitud']:.3f}")
+                                st.metric("Score", f"{res['similitud']:.3f}")
                                 if res['tipo'] == 'Meta':
                                     st.write(f"**Horizonte:** {res['horizonte']}")
                                     st.write(f"**Sector:** {res['sector']}")
@@ -243,46 +288,20 @@ def main():
                                 else:
                                     st.write(f"**Objetivo asociado:** {res['objetivo_nombre']}")
                                     st.write(f"**Meta:** {res['descripcion'][:300]}")
-                                    if res['conceptos']:
+                                    if res.get('conceptos'):
                                         st.write("**Conceptos clave:**", ", ".join(res['conceptos'][:5]))
     
-    else:  # Modo explorar catálogos
+    # Modo explorar catálogos
+    else:
         st.header("📚 Explorar catálogos")
-        pestaña = st.selectbox(
-            "Selecciona el catálogo a explorar",
-            ["Instrumentos", "Objetivos", "Metas", "Conceptos Estratégicos", "Amenazas"]
-        )
-        # Buscador de texto dentro de la tabla seleccionada
-        texto_buscar = st.text_input("Filtrar por texto (opcional)", key="buscador_catalogo")
-        
-        if pestaña == "Instrumentos":
-            df = df_inst
-            columnas_mostrar = ['nombre', 'escala', 'año_inicio', 'año_fin', 'entidad_lider', 'tematica_principal']
-        elif pestaña == "Objetivos":
-            df = df_objs
-            columnas_mostrar = ['id_objetivo', 'instrumento', 'nombre', 'descripción', 'nivel']
-        elif pestaña == "Metas":
-            df = df_metas
-            columnas_mostrar = ['id_meta', 'id_objetivo', 'descripcion', 'horizonte', 'sector']
-        elif pestaña == "Conceptos Estratégicos":
-            df = df_conceptos
-            columnas_mostrar = ['id_concepto', 'Concepto', 'Definición', 'Fuente / Marco']
-        else:  # Amenazas
-            if df_amenazas.empty:
-                st.warning("No hay datos de amenazas en la base de datos.")
-                return
-            df = df_amenazas
-            columnas_mostrar = ['id_amenazas', 'categoria', 'subcategoria', 'amenaza', 'descripcion_amenazas']
-        
-        # Aplicar filtro
-        if texto_buscar:
-            df_filtrado = buscar_en_tabla(df, texto_buscar, columnas_mostrar)
-            st.write(f"Mostrando {len(df_filtrado)} de {len(df)} filas que coinciden con '{texto_buscar}'")
-        else:
-            df_filtrado = df
-            st.write(f"Mostrando {len(df_filtrado)} filas")
-        
-        st.dataframe(df_filtrado[columnas_mostrar], use_container_width=True)
+        submodo = st.selectbox("Selecciona el tipo de exploración",
+                                ["Instrumentos (Jerárquico)", "Conceptos Estratégicos", "Amenazas"])
+        if submodo == "Instrumentos (Jerárquico)":
+            mostrar_instrumentos_jerarquico(df_inst, df_objs, df_metas, df_rel)
+        elif submodo == "Conceptos Estratégicos":
+            mostrar_tabla_descriptiva(df_conceptos, "Concepto", "Definición")
+        elif submodo == "Amenazas":
+            mostrar_tabla_descriptiva(df_amenazas, "amenaza", "descripcion_amenazas")
 
 if __name__ == "__main__":
     main()

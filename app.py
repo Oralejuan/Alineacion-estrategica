@@ -1,67 +1,18 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import re
-import math
-from collections import Counter
 import sqlite3
+import plotly.express as px
+import plotly.graph_objects as go
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
 
 st.set_page_config(page_title="Alineación Estratégica", layout="wide")
 st.title("🎯 Buscador de Alineación Estratégica")
 st.markdown("""
 Ingresa el objetivo o descripción de tu proyecto.  
-La herramienta buscará **objetivos**, **metas** y **conceptos estratégicos** relevantes.
+La herramienta buscará **objetivos**, **metas** y **conceptos estratégicos** usando inteligencia semántica.
 """)
-
-# -------------------------------------------------------------
-# Funciones de utilidad
-# -------------------------------------------------------------
-def color_similitud(score):
-    if score >= 0.7:
-        return "🟢"
-    elif score >= 0.4:
-        return "🟡"
-    else:
-        return "🔴"
-
-def preprocess(text):
-    if pd.isna(text):
-        return []
-    text = text.lower()
-    text = re.sub(r'[^a-záéíóúñü\s]', '', text)
-    return text.split()
-
-def build_vocab(corpus):
-    vocab = set()
-    for tokens in corpus:
-        vocab.update(tokens)
-    return {word: idx for idx, word in enumerate(sorted(vocab))}
-
-def compute_tf(tokens, vocab):
-    tf_vec = np.zeros(len(vocab))
-    counter = Counter(tokens)
-    for word, count in counter.items():
-        if word in vocab:
-            tf_vec[vocab[word]] = count / len(tokens)
-    return tf_vec
-
-def compute_idf(corpus_tokens, vocab):
-    N = len(corpus_tokens)
-    idf = np.zeros(len(vocab))
-    for word, idx in vocab.items():
-        df = sum(1 for tokens in corpus_tokens if word in set(tokens))
-        idf[idx] = math.log((1 + N) / (1 + df)) + 1
-    return idf
-
-def vectorize_tfidf(tf_matrix, idf_vector):
-    return tf_matrix * idf_vector
-
-def cosine_similarity_vec(v1, v2):
-    norm1 = np.linalg.norm(v1)
-    norm2 = np.linalg.norm(v2)
-    if norm1 == 0 or norm2 == 0:
-        return 0.0
-    return np.dot(v1, v2) / (norm1 * norm2)
 
 # -------------------------------------------------------------
 # Carga de datos desde SQLite
@@ -81,68 +32,43 @@ def cargar_datos():
         except:
             df_amenazas = pd.DataFrame()
         conn.close()
+        # Limpiar duplicados en objetivos por si acaso
+        df_objs = df_objs.drop_duplicates(subset=['id_objetivo'])
         return df_inst, df_objs, df_metas, df_rel, df_conceptos, df_amenazas
     except Exception as e:
         st.error(f"Error al cargar la base de datos: {e}")
         return None, None, None, None, None, None
 
-def obtener_columna_meta(df_rel):
-    posibles = ['id_meta', 'meta_id', 'ID_META', 'idMeta']
-    for col in posibles:
-        if col in df_rel.columns:
-            return col
-    for col in df_rel.columns:
-        if 'meta' in col.lower():
-            return col
-    return None
-
-# -------------------------------------------------------------
-# Preparación índices TF-IDF
-# -------------------------------------------------------------
 @st.cache_resource
-def preparar_indices(df_objs, df_metas, df_conceptos):
-    # Objetivos
+def cargar_modelo():
+    """Carga el modelo multilingüe de Sentence Transformers."""
+    return SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+
+@st.cache_resource
+def preparar_embeddings(model, df_objs, df_metas, df_conceptos):
+    """Genera embeddings para objetivos, metas y conceptos."""
+    # Textos de objetivos (nombre + descripción)
     textos_objs = (df_objs['nombre'].fillna('') + " " + df_objs['descripción'].fillna('')).tolist()
-    tokens_objs = [preprocess(t) for t in textos_objs]
-    # Metas
+    # Textos de metas (descripción)
     textos_metas = df_metas['descripcion'].fillna('').tolist()
-    tokens_metas = [preprocess(t) for t in textos_metas]
-    # Conceptos
+    # Textos de conceptos (nombre + definición)
     textos_conceptos = (df_conceptos['Concepto'].fillna('') + " " + df_conceptos['Definición'].fillna('')).tolist()
-    tokens_conceptos = [preprocess(t) for t in textos_conceptos]
 
-    all_tokens = tokens_objs + tokens_metas + tokens_conceptos
-    vocab = build_vocab(all_tokens)
+    # Codificar en lotes (muestra progreso)
+    with st.spinner("Generando embeddings (puede tomar un minuto la primera vez)..."):
+        emb_objs = model.encode(textos_objs, show_progress_bar=False)
+        emb_metas = model.encode(textos_metas, show_progress_bar=False)
+        emb_conceptos = model.encode(textos_conceptos, show_progress_bar=False)
+    return emb_objs, emb_metas, emb_conceptos
 
-    # Matrices TF
-    tf_objs = np.array([compute_tf(tok, vocab) for tok in tokens_objs])
-    tf_metas = np.array([compute_tf(tok, vocab) for tok in tokens_metas])
-    tf_conceptos = np.array([compute_tf(tok, vocab) for tok in tokens_conceptos])
+def buscar_semantica(query, model, emb_objs, emb_metas, emb_conceptos,
+                     df_objs, df_metas, df_conceptos, df_rel, top_n=10):
+    """Codifica la consulta y devuelve los más similares en cada categoría."""
+    emb_query = model.encode([query])
+    sim_objs = cosine_similarity(emb_query, emb_objs).flatten()
+    sim_metas = cosine_similarity(emb_query, emb_metas).flatten()
+    sim_conceptos = cosine_similarity(emb_query, emb_conceptos).flatten()
 
-    # IDF global
-    idf = compute_idf(all_tokens, vocab)
-
-    tfidf_objs = vectorize_tfidf(tf_objs, idf)
-    tfidf_metas = vectorize_tfidf(tf_metas, idf)
-    tfidf_conceptos = vectorize_tfidf(tf_conceptos, idf)
-
-    return (tfidf_objs, tfidf_metas, tfidf_conceptos, vocab, idf,
-            textos_objs, textos_metas, textos_conceptos)
-
-def buscar_alineacion(query, tfidf_objs, tfidf_metas, tfidf_conceptos,
-                      vocab, idf, df_objs, df_metas, df_conceptos, df_rel, top_n=10):
-    tokens_q = preprocess(query)
-    if not tokens_q:
-        return [], [], []
-    tf_q = compute_tf(tokens_q, vocab)
-    tfidf_q = tf_q * idf
-
-    # Similitudes
-    sim_objs = [cosine_similarity_vec(tfidf_q, vec) for vec in tfidf_objs]
-    sim_metas = [cosine_similarity_vec(tfidf_q, vec) for vec in tfidf_metas]
-    sim_conceptos = [cosine_similarity_vec(tfidf_q, vec) for vec in tfidf_conceptos]
-
-    # Índices top
     idx_objs = np.argsort(sim_objs)[::-1][:top_n]
     idx_metas = np.argsort(sim_metas)[::-1][:top_n]
     idx_conceptos = np.argsort(sim_conceptos)[::-1][:top_n]
@@ -150,7 +76,7 @@ def buscar_alineacion(query, tfidf_objs, tfidf_metas, tfidf_conceptos,
     resultados_objs = []
     for idx in idx_objs:
         score = sim_objs[idx]
-        if score < 0.01: continue
+        if score < 0.1: continue
         row = df_objs.iloc[idx]
         resultados_objs.append({
             'instrumento': row['instrumento'],
@@ -160,11 +86,24 @@ def buscar_alineacion(query, tfidf_objs, tfidf_metas, tfidf_conceptos,
             'similitud': round(score, 3)
         })
 
+    # Para metas, necesitamos obtener conceptos asociados
+    # Determinar columna de id_meta en df_rel
+    col_meta = None
+    posibles = ['id_meta', 'meta_id', 'ID_META', 'idMeta']
+    for col in posibles:
+        if col in df_rel.columns:
+            col_meta = col
+            break
+    if col_meta is None:
+        for col in df_rel.columns:
+            if 'meta' in col.lower():
+                col_meta = col
+                break
+
     resultados_metas = []
-    col_meta = obtener_columna_meta(df_rel)
     for idx in idx_metas:
         score = sim_metas[idx]
-        if score < 0.01: continue
+        if score < 0.1: continue
         row = df_metas.iloc[idx]
         obj_row = df_objs[df_objs['id_objetivo'] == row['id_objetivo']]
         instrumento = obj_row.iloc[0]['instrumento'] if not obj_row.empty else 'No encontrado'
@@ -187,7 +126,7 @@ def buscar_alineacion(query, tfidf_objs, tfidf_metas, tfidf_conceptos,
     resultados_conceptos = []
     for idx in idx_conceptos:
         score = sim_conceptos[idx]
-        if score < 0.01: continue
+        if score < 0.1: continue
         row = df_conceptos.iloc[idx]
         resultados_conceptos.append({
             'concepto': row['Concepto'],
@@ -196,26 +135,72 @@ def buscar_alineacion(query, tfidf_objs, tfidf_metas, tfidf_conceptos,
             'similitud': round(score, 3)
         })
 
-    # Ordenar cada lista (ya lo están por el orden de los índices)
+    # Ordenar por similitud descendente (ya lo están por el orden de índices)
     return resultados_objs, resultados_metas, resultados_conceptos
 
-def exportar_resultados_csv(resultados_objs, resultados_metas, resultados_conceptos):
+def exportar_resultados_csv(res_objs, res_metas, res_conceptos):
     rows = []
-    for r in resultados_objs:
+    for r in res_objs:
         rows.append({'Tipo': 'Objetivo', 'Nombre': r['nombre'], 'Descripción': r['descripcion'],
                      'Instrumento': r['instrumento'], 'Similitud': r['similitud']})
-    for r in resultados_metas:
+    for r in res_metas:
         rows.append({'Tipo': 'Meta', 'Descripción': r['descripcion'], 'Instrumento': r['instrumento'],
                      'Objetivo asociado': r['objetivo_nombre'], 'Horizonte': r['horizonte'],
                      'Sector': r['sector'], 'Conceptos': ', '.join(r['conceptos']), 'Similitud': r['similitud']})
-    for r in resultados_conceptos:
+    for r in res_conceptos:
         rows.append({'Tipo': 'Concepto', 'Concepto': r['concepto'], 'Definición': r['definicion'],
                      'Fuente': r['fuente'], 'Similitud': r['similitud']})
     df = pd.DataFrame(rows)
     return df.to_csv(index=False, sep=';', encoding='utf-8-sig')
 
 # -------------------------------------------------------------
-# Exploración jerárquica y descriptiva
+# Dashboard de análisis estadístico
+# -------------------------------------------------------------
+def mostrar_dashboard(df_inst, df_objs, df_metas, df_conceptos):
+    st.header("📊 Dashboard de la base de conocimiento")
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Instrumentos", len(df_inst))
+    col2.metric("Objetivos", len(df_objs))
+    col3.metric("Metas", len(df_metas))
+    col4.metric("Conceptos estratégicos", len(df_conceptos))
+
+    # Distribución de metas por sector
+    if not df_metas.empty and 'sector' in df_metas.columns:
+        sector_counts = df_metas['sector'].value_counts().reset_index()
+        sector_counts.columns = ['Sector', 'Cantidad']
+        fig_sector = px.bar(sector_counts, x='Sector', y='Cantidad', title='Metas por sector',
+                            color='Cantidad', color_continuous_scale='Blues')
+        st.plotly_chart(fig_sector, use_container_width=True)
+
+    # Distribución por horizonte
+    if not df_metas.empty and 'horizonte' in df_metas.columns:
+        horizonte_counts = df_metas['horizonte'].value_counts().reset_index()
+        horizonte_counts.columns = ['Horizonte', 'Cantidad']
+        fig_horizonte = px.bar(horizonte_counts, x='Horizonte', y='Cantidad', title='Metas por horizonte temporal',
+                               color='Cantidad', color_continuous_scale='Oranges')
+        st.plotly_chart(fig_horizonte, use_container_width=True)
+
+    # Top instrumentos con más objetivos
+    if not df_objs.empty and 'instrumento' in df_objs.columns:
+        top_inst = df_objs['instrumento'].value_counts().head(10).reset_index()
+        top_inst.columns = ['Instrumento', 'Cantidad de objetivos']
+        fig_top_inst = px.bar(top_inst, x='Instrumento', y='Cantidad de objetivos',
+                              title='Top 10 instrumentos con más objetivos',
+                              color='Cantidad de objetivos', color_continuous_scale='Greens')
+        st.plotly_chart(fig_top_inst, use_container_width=True)
+
+    # Nube de conceptos (si hay muchos, mejor tabla de frecuencias)
+    if not df_conceptos.empty and 'Concepto' in df_conceptos.columns:
+        st.subheader("Principales conceptos estratégicos")
+        # Podríamos mostrar una tabla con los 20 primeros (o usar wordcloud, pero requiere PIL)
+        # Mostramos una tabla simple
+        conceptos_list = df_conceptos['Concepto'].dropna().tolist()
+        freq = pd.Series(conceptos_list).value_counts().head(20).reset_index()
+        freq.columns = ['Concepto', 'Frecuencia']
+        st.dataframe(freq, use_container_width=True)
+
+# -------------------------------------------------------------
+# Exploración jerárquica y filtros
 # -------------------------------------------------------------
 def mostrar_instrumentos_jerarquico(df_inst, df_objs, df_metas, df_rel):
     instrumentos = df_inst['nombre'].unique()
@@ -233,7 +218,12 @@ def mostrar_instrumentos_jerarquico(df_inst, df_objs, df_metas, df_rel):
                         st.write("No hay metas para este objetivo.")
                     else:
                         for _, meta in metas.iterrows():
-                            col_meta = obtener_columna_meta(df_rel)
+                            col_meta = None
+                            posibles = ['id_meta', 'meta_id', 'ID_META', 'idMeta']
+                            for col in posibles:
+                                if col in df_rel.columns:
+                                    col_meta = col
+                                    break
                             conceptos = []
                             if col_meta is not None and 'Concepto' in df_rel.columns:
                                 conceptos_df = df_rel[df_rel[col_meta] == meta['id_meta']]
@@ -258,7 +248,7 @@ def filtrar_tabla(df, texto_buscar):
 def main():
     modo = st.sidebar.radio(
         "Modo de uso",
-        ["🔍 Alineación de proyectos", "📚 Explorar catálogos"]
+        ["🔍 Alineación de proyectos", "📚 Explorar catálogos", "📊 Dashboard de análisis"]
     )
     datos = cargar_datos()
     if datos[0] is None:
@@ -268,9 +258,10 @@ def main():
     st.sidebar.write(f"Objetivos: {len(df_objs)} | Metas: {len(df_metas)} | Conceptos: {len(df_conceptos)}")
 
     if modo == "🔍 Alineación de proyectos":
-        with st.spinner("Preparando índices de búsqueda..."):
-            (tfidf_objs, tfidf_metas, tfidf_conceptos, vocab, idf,
-             _, _, _) = preparar_indices(df_objs, df_metas, df_conceptos)
+        # Cargar modelo y embeddings (cacheados)
+        with st.spinner("Cargando modelo de lenguaje y preparando índices (primera vez puede tomar un minuto)..."):
+            model = cargar_modelo()
+            emb_objs, emb_metas, emb_conceptos = preparar_embeddings(model, df_objs, df_metas, df_conceptos)
 
         consulta = st.text_area("Describe tu proyecto:", height=100)
         top_n = st.slider("Número de resultados por categoría", 5, 20, 10)
@@ -279,26 +270,28 @@ def main():
             if not consulta.strip():
                 st.warning("Ingresa una descripción.")
             else:
-                with st.spinner("Buscando..."):
-                    res_objs, res_metas, res_conceptos = buscar_alineacion(
-                        consulta, tfidf_objs, tfidf_metas, tfidf_conceptos,
-                        vocab, idf, df_objs, df_metas, df_conceptos, df_rel, top_n)
+                with st.spinner("Buscando semánticamente..."):
+                    res_objs, res_metas, res_conceptos = buscar_semantica(
+                        consulta, model, emb_objs, emb_metas, emb_conceptos,
+                        df_objs, df_metas, df_conceptos, df_rel, top_n)
 
                 if not (res_objs or res_metas or res_conceptos):
                     st.info("No se encontraron resultados relevantes.")
                 else:
-                    st.success(f"Se encontraron {len(res_objs)} objetivos, {len(res_metas)} metas y {len(res_conceptos)} conceptos relacionados.")
+                    st.success(f"Encontrados: {len(res_objs)} objetivos, {len(res_metas)} metas, {len(res_conceptos)} conceptos.")
                     csv_data = exportar_resultados_csv(res_objs, res_metas, res_conceptos)
                     st.download_button("📥 Exportar resultados a CSV", data=csv_data,
                                        file_name="resultados_alineacion.csv", mime="text/csv")
 
-                    tabs = st.tabs(["🎯 Objetivos", "📋 Metas", "🧠 Conceptos Estratégicos"])
+                    tabs = st.tabs(["🎯 Objetivos", "📋 Metas", "🧠 Conceptos"])
                     with tabs[0]:
                         if not res_objs:
                             st.info("No hay objetivos coincidentes.")
                         else:
                             for r in res_objs:
-                                with st.expander(f"{color_similitud(r['similitud'])} {r['nombre']} (score: {r['similitud']})"):
+                                score = r['similitud']
+                                color = "🟢" if score >= 0.7 else "🟡" if score >= 0.4 else "🔴"
+                                with st.expander(f"{color} {r['nombre']} (similitud: {score})"):
                                     st.write(f"**Instrumento:** {r['instrumento']}")
                                     st.write(f"**Descripción:** {r['descripcion']}")
                     with tabs[1]:
@@ -306,7 +299,9 @@ def main():
                             st.info("No hay metas coincidentes.")
                         else:
                             for r in res_metas:
-                                with st.expander(f"{color_similitud(r['similitud'])} Meta (score: {r['similitud']})"):
+                                score = r['similitud']
+                                color = "🟢" if score >= 0.7 else "🟡" if score >= 0.4 else "🔴"
+                                with st.expander(f"{color} Meta (similitud: {score})"):
                                     st.write(f"**Instrumento:** {r['instrumento']}")
                                     st.write(f"**Objetivo asociado:** {r['objetivo_nombre']}")
                                     st.write(f"**Descripción:** {r['descripcion']}")
@@ -318,18 +313,20 @@ def main():
                             st.info("No hay conceptos coincidentes.")
                         else:
                             for r in res_conceptos:
-                                with st.expander(f"{color_similitud(r['similitud'])} {r['concepto']} (score: {r['similitud']})"):
+                                score = r['similitud']
+                                color = "🟢" if score >= 0.7 else "🟡" if score >= 0.4 else "🔴"
+                                with st.expander(f"{color} {r['concepto']} (similitud: {score})"):
                                     st.write(f"**Definición:** {r['definicion']}")
                                     if r['fuente']:
                                         st.caption(f"Fuente: {r['fuente']}")
 
-    else:  # Explorar catálogos
+    elif modo == "📚 Explorar catálogos":
         st.header("📚 Explorar catálogos")
         cat_seleccion = st.selectbox(
             "Selecciona un catálogo",
             ["Instrumentos", "Objetivos", "Metas", "Conceptos Estratégicos", "Amenazas"]
         )
-        texto_buscar = st.text_input("Filtrar por texto (búsqueda libre)", key="filtro_catalogo")
+        texto_buscar = st.text_input("Filtrar por texto", key="filtro_catalogo")
         if cat_seleccion == "Instrumentos":
             df = df_inst
             columnas_mostrar = ['nombre', 'escala', 'año_inicio', 'año_fin', 'entidad_lider', 'tematica_principal']
@@ -352,6 +349,9 @@ def main():
         df_filtrado = filtrar_tabla(df, texto_buscar)
         st.write(f"Mostrando {len(df_filtrado)} de {len(df)} filas")
         st.dataframe(df_filtrado[columnas_mostrar], use_container_width=True)
+
+    else:  # Dashboard de análisis
+        mostrar_dashboard(df_inst, df_objs, df_metas, df_conceptos)
 
 if __name__ == "__main__":
     main()

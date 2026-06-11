@@ -11,7 +11,7 @@ st.set_page_config(page_title="Alineación Estratégica", layout="wide")
 st.title("🎯 Buscador de Alineación Estratégica")
 st.markdown("""
 Ingresa el objetivo o descripción de tu proyecto.  
-La herramienta buscará **objetivos**, **metas** y **conceptos estratégicos** relevantes usando **embeddings multilingües**.
+La herramienta buscará **instrumentos**, **objetivos**, **metas** y **conceptos estratégicos** relevantes usando **embeddings multilingües**.
 """)
 
 # -------------------------------------------------------------
@@ -75,40 +75,36 @@ def cargar_modelo():
 # -------------------------------------------------------------
 # Generar embeddings y guardar en session_state
 # -------------------------------------------------------------
-def generar_embeddings(model, df_inst, df_objs, df_metas, df_conceptos):   # NUEVO: añadido df_inst
-    # Textos de instrumentos (nombre + descripción)
-    textos_inst = (df_inst['nombre'].fillna('') + " " + df_inst['descripción'].fillna('')).apply(preprocess).tolist()   # NUEVO
+def generar_embeddings(model, df_inst, df_objs, df_metas, df_conceptos):
+    textos_inst = (df_inst['nombre'].fillna('') + " " + df_inst['descripción'].fillna('')).apply(preprocess).tolist()
     textos_objs = (df_objs['nombre'].fillna('') + " " + df_objs['descripción'].fillna('')).apply(preprocess).tolist()
     textos_metas = df_metas['descripcion'].fillna('').apply(preprocess).tolist()
     textos_conceptos = (df_conceptos['Concepto'].fillna('') + " " + df_conceptos['Definición'].fillna('')).apply(preprocess).tolist()
     
     with st.spinner("Generando embeddings (puede tardar un minuto la primera vez)..."):
-        emb_inst = model.encode(textos_inst, show_progress_bar=False)      # NUEVO
+        emb_inst = model.encode(textos_inst, show_progress_bar=False)
         emb_objs = model.encode(textos_objs, show_progress_bar=False)
         emb_metas = model.encode(textos_metas, show_progress_bar=False)
         emb_conceptos = model.encode(textos_conceptos, show_progress_bar=False)
     
-    return emb_inst, emb_objs, emb_metas, emb_conceptos   # NUEVO: devuelve emb_inst
-    
-    return emb_objs, emb_metas, emb_conceptos
+    return emb_inst, emb_objs, emb_metas, emb_conceptos
 
-def buscar_alineacion(query, model, emb_inst, emb_objs, emb_metas, emb_conceptos,   # NUEVO: emb_inst
-                      df_inst, df_objs, df_metas, df_conceptos, df_rel, top_n=10):  # NUEVO: df_inst
+def buscar_alineacion(query, model, emb_inst, emb_objs, emb_metas, emb_conceptos,
+                      df_inst, df_objs, df_metas, df_conceptos, df_rel, top_n=10):
     query_limpia = preprocess(query)
     if not query_limpia:
-        return [], [], [], []   # NUEVO: retorna también instrumentos vacío
+        return [], [], [], []
     emb_q = model.encode([query_limpia])
-    sim_inst = cosine_similarity(emb_q, emb_inst).flatten()   # NUEVO
+    sim_inst = cosine_similarity(emb_q, emb_inst).flatten()
     sim_objs = cosine_similarity(emb_q, emb_objs).flatten()
     sim_metas = cosine_similarity(emb_q, emb_metas).flatten()
     sim_conceptos = cosine_similarity(emb_q, emb_conceptos).flatten()
     
-    idx_inst = np.argsort(sim_inst)[::-1][:top_n]   # NUEVO
+    idx_inst = np.argsort(sim_inst)[::-1][:top_n]
     idx_objs = np.argsort(sim_objs)[::-1][:top_n]
     idx_metas = np.argsort(sim_metas)[::-1][:top_n]
     idx_conceptos = np.argsort(sim_conceptos)[::-1][:top_n]
     
-    # Resultados para instrumentos (nuevo)
     resultados_inst = []
     for idx in idx_inst:
         score = sim_inst[idx]
@@ -123,7 +119,6 @@ def buscar_alineacion(query, model, emb_inst, emb_objs, emb_metas, emb_conceptos
             'similitud': round(score, 3)
         })
     
-    # Resultados para objetivos (sin cambios)
     resultados_objs = []
     for idx in idx_objs:
         score = sim_objs[idx]
@@ -137,7 +132,6 @@ def buscar_alineacion(query, model, emb_inst, emb_objs, emb_metas, emb_conceptos
             'similitud': round(score, 3)
         })
     
-    # Resultados para metas (sin cambios)
     resultados_metas = []
     col_meta = obtener_columna_meta(df_rel)
     for idx in idx_metas:
@@ -162,7 +156,6 @@ def buscar_alineacion(query, model, emb_inst, emb_objs, emb_metas, emb_conceptos
             'conceptos': conceptos
         })
     
-    # Resultados para conceptos (sin cambios)
     resultados_conceptos = []
     for idx in idx_conceptos:
         score = sim_conceptos[idx]
@@ -174,9 +167,9 @@ def buscar_alineacion(query, model, emb_inst, emb_objs, emb_metas, emb_conceptos
             'fuente': row.get('Fuente / Marco', ''),
             'similitud': round(score, 3)
         })
-    return resultados_inst, resultados_objs, resultados_metas, resultados_conceptos   # NUEVO
+    return resultados_inst, resultados_objs, resultados_metas, resultados_conceptos
 
-def exportar_resultados_csv(res_inst, res_objs, res_metas, res_conceptos):   # NUEVO
+def exportar_resultados_csv(res_inst, res_objs, res_metas, res_conceptos):
     rows = []
     for r in res_inst:
         rows.append({'Tipo': 'Instrumento', 'Nombre': r['nombre'], 'Descripción': r['descripcion'],
@@ -290,26 +283,30 @@ def main():
     
     if modo == "🔍 Alineación de proyectos":
         model = cargar_modelo()
-    if 'emb_inst' not in st.session_state:   # NUEVO
-        with st.spinner("Generando índices de búsqueda..."):
-            emb_inst, emb_objs, emb_metas, emb_conceptos = generar_embeddings(
-                model, df_inst, df_objs, df_metas, df_conceptos)   # NUEVO: pasar df_inst
-            st.session_state.emb_inst = emb_inst
-            st.session_state.emb_objs = emb_objs
-            st.session_state.emb_metas = emb_metas
-            st.session_state.emb_conceptos = emb_conceptos
-    else:
-        emb_inst = st.session_state.emb_inst
-        emb_objs = st.session_state.emb_objs
-        emb_metas = st.session_state.emb_metas
-        emb_conceptos = st.session_state.emb_conceptos
+        # Inicializar embeddings en session_state si no existen
+        if 'emb_inst' not in st.session_state:
+            with st.spinner("Generando índices de búsqueda (puede tardar un minuto la primera vez)..."):
+                emb_inst, emb_objs, emb_metas, emb_conceptos = generar_embeddings(
+                    model, df_inst, df_objs, df_metas, df_conceptos)
+                st.session_state.emb_inst = emb_inst
+                st.session_state.emb_objs = emb_objs
+                st.session_state.emb_metas = emb_metas
+                st.session_state.emb_conceptos = emb_conceptos
+        else:
+            emb_inst = st.session_state.emb_inst
+            emb_objs = st.session_state.emb_objs
+            emb_metas = st.session_state.emb_metas
+            emb_conceptos = st.session_state.emb_conceptos
         
+        # Elementos de búsqueda
         consulta = st.text_area("Describe tu proyecto:", height=100)
         top_n = st.slider("Número de resultados por categoría", 5, 20, 10)
+        
         # Filtros laterales
         with st.sidebar:
             st.subheader("🔎 Filtros")
-            mostrar = st.multiselect("Mostrar", ["Instrumentos", "Objetivos", "Metas", "Conceptos"], default=["Instrumentos", "Objetivos", "Metas", "Conceptos"])
+            mostrar = st.multiselect("Mostrar", ["Instrumentos", "Objetivos", "Metas", "Conceptos"], 
+                                     default=["Instrumentos", "Objetivos", "Metas", "Conceptos"])
             min_score = st.slider("Similitud mínima", 0.0, 1.0, 0.1, 0.05)
             sectores_filtro = st.multiselect("Sector (solo metas)", df_metas['sector'].dropna().unique())
             horizontes_filtro = st.multiselect("Horizonte (solo metas)", df_metas['horizonte'].dropna().unique())
@@ -319,32 +316,38 @@ def main():
                 st.warning("Ingresa una descripción.")
             else:
                 with st.spinner("Buscando..."):
-                    res_inst, res_objs, res_metas, res_conceptos = buscar_alineacion(   # NUEVO
+                    res_inst, res_objs, res_metas, res_conceptos = buscar_alineacion(
                         consulta, model, emb_inst, emb_objs, emb_metas, emb_conceptos,
-                        df_inst, df_objs, df_metas, df_conceptos, df_rel, top_n)   # NUEVO: pasar df_inst
-                    
+                        df_inst, df_objs, df_metas, df_conceptos, df_rel, top_n)
+                
                 # Aplicar filtros
+                if "Instrumentos" not in mostrar:
+                    res_inst = []
                 if "Objetivos" not in mostrar:
                     res_objs = []
                 if "Metas" not in mostrar:
                     res_metas = []
                 if "Conceptos" not in mostrar:
                     res_conceptos = []
+                
+                res_inst = [r for r in res_inst if r['similitud'] >= min_score]
                 res_objs = [r for r in res_objs if r['similitud'] >= min_score]
                 res_metas = [r for r in res_metas if r['similitud'] >= min_score]
                 res_conceptos = [r for r in res_conceptos if r['similitud'] >= min_score]
+                
                 if sectores_filtro:
                     res_metas = [r for r in res_metas if r['sector'] in sectores_filtro]
                 if horizontes_filtro:
                     res_metas = [r for r in res_metas if r['horizonte'] in horizontes_filtro]
                 
-                if not (res_objs or res_metas or res_conceptos):
+                if not (res_inst or res_objs or res_metas or res_conceptos):
                     st.info("No se encontraron resultados con los filtros actuales.")
                 else:
-                    st.success(f"Encontrados: {len(res_objs)} objetivos, {len(res_metas)} metas, {len(res_conceptos)} conceptos.")
+                    st.success(f"Encontrados: {len(res_inst)} instrumentos, {len(res_objs)} objetivos, {len(res_metas)} metas, {len(res_conceptos)} conceptos.")
                     csv_data = exportar_resultados_csv(res_inst, res_objs, res_metas, res_conceptos)
                     st.download_button("📥 Exportar resultados a CSV", data=csv_data,
                                        file_name="resultados_alineacion.csv", mime="text/csv")
+                    
                     tabs = st.tabs(["📜 Instrumentos", "🎯 Objetivos", "📋 Metas", "🧠 Conceptos"])
                     with tabs[0]:
                         for r in res_inst:
@@ -372,27 +375,29 @@ def main():
                                 st.write(f"**Definición:** {r['definicion']}")
                                 if r['fuente']:
                                     st.caption(f"Fuente: {r['fuente']}")
-                                else:  # Explorar catálogos
-                                    st.header("📚 Explorar catálogos")
-                                    cat = st.selectbox("Selecciona un catálogo", ["Instrumentos", "Objetivos", "Metas", "Conceptos Estratégicos", "Amenazas"])
-                                    texto_buscar = st.text_input("Filtrar por texto")
-                                    if cat == "Instrumentos":
-                                        df = df_inst
-                                        cols = ['nombre', 'escala', 'año_inicio', 'año_fin', 'entidad_lider', 'tematica_principal']
-                                    elif cat == "Objetivos":
-                                        df = df_objs
-                                        cols = ['id_objetivo', 'instrumento', 'nombre', 'descripción', 'nivel']
-                                    elif cat == "Metas":
-                                        df = df_metas
-                                        cols = ['id_meta', 'id_objetivo', 'descripcion', 'horizonte', 'sector']
-                                    elif cat == "Conceptos Estratégicos":
-                                        df = df_conceptos
-                                        cols = ['id_concepto', 'Concepto', 'Definición', 'Fuente / Marco']
-                                    else:
-                                        df = df_amenazas
-                                        cols = ['id_amenazas', 'categoria', 'subcategoria', 'amenaza', 'descripcion_amenazas']
-                                        df_filt = filtrar_tabla(df, texto_buscar)
-                                        st.write(f"Mostrando {len(df_filt)} de {len(df)} filas")
-                                        st.dataframe(df_filt[cols], use_container_width=True)
-                            if __name__ == "__main__":
-                                main()
+    
+    else:  # Modo explorar catálogos
+        st.header("📚 Explorar catálogos")
+        cat = st.selectbox("Selecciona un catálogo", ["Instrumentos", "Objetivos", "Metas", "Conceptos Estratégicos", "Amenazas"])
+        texto_buscar = st.text_input("Filtrar por texto")
+        if cat == "Instrumentos":
+            df = df_inst
+            cols = ['nombre', 'escala', 'año_inicio', 'año_fin', 'entidad_lider', 'tematica_principal']
+        elif cat == "Objetivos":
+            df = df_objs
+            cols = ['id_objetivo', 'instrumento', 'nombre', 'descripción', 'nivel']
+        elif cat == "Metas":
+            df = df_metas
+            cols = ['id_meta', 'id_objetivo', 'descripcion', 'horizonte', 'sector']
+        elif cat == "Conceptos Estratégicos":
+            df = df_conceptos
+            cols = ['id_concepto', 'Concepto', 'Definición', 'Fuente / Marco']
+        else:
+            df = df_amenazas
+            cols = ['id_amenazas', 'categoria', 'subcategoria', 'amenaza', 'descripcion_amenazas']
+        df_filt = filtrar_tabla(df, texto_buscar)
+        st.write(f"Mostrando {len(df_filt)} de {len(df)} filas")
+        st.dataframe(df_filt[cols], use_container_width=True)
+
+if __name__ == "__main__":
+    main()

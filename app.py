@@ -372,8 +372,8 @@ def main():
                                 st.write(f"**Definición:** {r['definicion']}")
                                 if r['fuente']:
                                     st.caption(f"Fuente: {r['fuente']}")
-    
-    else:  # Explorar catálogos
+                                else:  # Explorar catálogos
+                                    
         st.header("📚 Explorar catálogos")
         cat = st.selectbox("Selecciona un catálogo", ["Instrumentos", "Objetivos", "Metas", "Conceptos Estratégicos", "Amenazas"])
         texto_buscar = st.text_input("Filtrar por texto")

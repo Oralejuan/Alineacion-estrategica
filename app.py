@@ -6,7 +6,13 @@ import math
 from collections import Counter
 import sqlite3
 
+# Configuración de página
 st.set_page_config(page_title="Alineación Estratégica", layout="wide")
+st.title("🎯 Buscador de Alineación Estratégica")
+st.markdown("""
+Ingresa el objetivo o descripción de tu proyecto.  
+La herramienta buscará los **instrumentos**, **objetivos**, **metas** y **conceptos estratégicos** más relevantes.
+""")
 
 # -------------------------------------------------------------
 # Funciones de utilidad

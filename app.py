@@ -37,7 +37,7 @@ def preprocess(text):
 # -------------------------------------------------------------
 @st.cache_data
 def cargar_datos():
-    db_path = "mi_base_de_datos.db"
+    db_path = "mi_base_de_datos_v2.db"
     try:
         conn = sqlite3.connect(db_path)
         df_inst = pd.read_sql_query("SELECT * FROM INSTRUMENTOS", conn)
